@@ -48,6 +48,10 @@ pub trait WeightInfo {
 	fn approve_publisher() -> Weight;
 	fn revoke_publisher() -> Weight;
 	fn publish_service(n: u32, ) -> Weight;
+	fn subscribe_service() -> Weight;
+	fn unsubscribe_service() -> Weight;
+	fn renew_subscription() -> Weight;
+	fn unpublished_service() -> Weight;
 	// fn set_subs_old(p: u32, ) -> Weight;
 	// fn clear_identity(r: u32, s: u32, x: u32, ) -> Weight;
 	// fn request_judgement(r: u32, x: u32, ) -> Weight;
@@ -85,6 +89,22 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		(38_917_000 as Weight)
 			// Standard Error: 3_000
 			.saturating_add((5_331_000 as Weight).saturating_mul(n as Weight))
+	}
+
+	fn subscribe_service() -> Weight {
+		(19_176_000 as Weight)
+	}
+
+	fn unsubscribe_service() -> Weight {
+		(19_176_000 as Weight)
+	}
+
+	fn renew_subscription() -> Weight {
+		(19_176_000 as Weight)
+	}
+
+	fn unpublished_service() -> Weight {
+		(19_176_000 as Weight)
 	}
 	// Storage: Identity IdentityOf (r:1 w:0)
 	// Storage: Identity SubsOf (r:1 w:1)
@@ -243,6 +263,22 @@ impl WeightInfo for () {
 		(38_917_000 as Weight)
 			// Standard Error: 3_000
 			.saturating_add((5_331_000 as Weight).saturating_mul(n as Weight))
+	}
+
+	fn subscribe_service() -> Weight {
+		(19_176_000 as Weight)
+	}
+
+	fn unsubscribe_service() -> Weight {
+		(19_176_000 as Weight)
+	}
+
+	fn renew_subscription() -> Weight {
+		(19_176_000 as Weight)
+	}
+
+	fn unpublished_service() -> Weight {
+		(19_176_000 as Weight)
 	}
 	// Storage: Identity IdentityOf (r:1 w:0)
 	// Storage: Identity SubsOf (r:1 w:1)

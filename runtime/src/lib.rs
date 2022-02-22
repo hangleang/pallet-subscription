@@ -316,6 +316,7 @@ parameter_types! {
 	pub const MaximumNameLength: u32 = 100;
 	pub const MaximumContractLength: u32 = 256;
 	pub const MaximumDescriptionLength: u32 = 1275;
+	pub const DataDepositPerByte: Balance = 1 * CENTS;
 }
 
 impl pallet_subscription::Config for Runtime {
@@ -327,6 +328,9 @@ impl pallet_subscription::Config for Runtime {
 	type MaximumContractLength = MaximumContractLength;
 	type MaximumDescriptionLength = MaximumDescriptionLength;
 	type ApproveOrigin = frame_system::EnsureRoot<AccountId>;
+	type ForceOrigin = frame_system::EnsureRoot<AccountId>;
+	type OnSlash = ();
+	type DataDepositPerByte = DataDepositPerByte;
 	type WeightInfo = pallet_subscription::weights::SubstrateWeight<Runtime>;
 }
 
