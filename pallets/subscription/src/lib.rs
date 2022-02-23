@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub mod weights;
+mod tests;
 
 pub use pallet::*;
 use sp_std::prelude::*;
