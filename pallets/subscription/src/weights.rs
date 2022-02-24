@@ -51,7 +51,7 @@ pub trait WeightInfo {
 	fn subscribe_service() -> Weight;
 	fn unsubscribe_service() -> Weight;
 	fn renew_subscription() -> Weight;
-	fn unpublished_service() -> Weight;
+	fn unpublish_service() -> Weight;
 	// fn set_subs_old(p: u32, ) -> Weight;
 	// fn clear_identity(r: u32, s: u32, x: u32, ) -> Weight;
 	// fn request_judgement(r: u32, x: u32, ) -> Weight;
@@ -103,7 +103,7 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		(19_176_000 as Weight)
 	}
 
-	fn unpublished_service() -> Weight {
+	fn unpublish_service() -> Weight {
 		(19_176_000 as Weight)
 	}
 	// Storage: Identity IdentityOf (r:1 w:0)
@@ -277,7 +277,7 @@ impl WeightInfo for () {
 		(19_176_000 as Weight)
 	}
 
-	fn unpublished_service() -> Weight {
+	fn unpublish_service() -> Weight {
 		(19_176_000 as Weight)
 	}
 	// Storage: Identity IdentityOf (r:1 w:0)
