@@ -21,6 +21,9 @@ type NegativeImbalanceOf<T> = <<T as Config>::Currency as Currency<
 	<T as frame_system::Config>::AccountId,
 >>::NegativeImbalance;
 
+// type BalanceOf<T> = pallet_treasury::BalanceOf<T>;
+// type PositiveImbalanceOf<T> = pallet_treasury::PositiveImbalanceOf<T>;
+
 /// An index of a service. Just a `u32`.
 pub type ServiceIndex = u32;
 
@@ -35,31 +38,37 @@ pub struct Service<AccountId, Balance, MaximumNameLength: Get<u32>, MaximumContr
   /// The name of this service
   name: BoundedVec<u8, MaximumNameLength>,
   /// The (total) amount that should be paid to publisher once subscribe to it
-	cost: Balance,
+	cost: Option<Balance>,
   /// The amount held on deposit (reserved) for making this proposal.
 	bond: Balance,
   /// The link to contract 
   contract: BoundedVec<u8, MaximumContractLength>,
   /// If the service is periodic, then this points to the information concerning that.
 	maybe_periodic: Option<u32>,
+  /// Subscriber may need approval or not, in order to subscribe to the service.
+  need_approval: bool,
   /// The status of this service.
   status: ServiceStatus,
 }
 
-// impl<AccountId: PartialEq + Clone + Ord, Balance, BlockNumber: Clone>
-// 	Service<AccountId, Balance, BlockNumber>
-// {
-// 	/// Getter for service status, to be used for child bounties.
-// 	pub fn get_status(&self) -> ServiceStatus<AccountId, BlockNumber> {
-// 		self.status.clone()
-// 	}
-// }
+impl<AccountId: PartialEq + Clone + Ord, Balance, MaximumNameLength: Get<u32>, MaximumContractLength: Get<u32>>
+	Service<AccountId, Balance, MaximumNameLength, MaximumContractLength>
+{
+	/// Getter for service status, to be used for child bounties.
+	pub fn get_status(&self) -> ServiceStatus {
+		self.status.clone()
+	}
+}
 
 /// The status of a subscription service.
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 pub enum ServiceStatus {
+  Proposed,
   Published,
-  Unpublished,
+  Unpublished {
+    // The service can be completely closed at this block
+    release_at: BlockNumber
+  },
 }
 
 /// A subscription info.
@@ -69,8 +78,6 @@ pub struct Subscription<BlockNumber> {
 	start_on: BlockNumber,
   /// subscription expire on block
 	expire_on: Option<BlockNumber>,
-  /// The status of this service.
-  active: bool,
 }
 
 /// The status of a publisher.
@@ -99,6 +106,12 @@ pub mod pallet {
     /// The currency trait.
 		type Currency: Currency<Self::AccountId> + ReservableCurrency<Self::AccountId>;
 
+    #[pallet::constant]
+		type PalletId: Get<PalletId>;
+
+    /// The amount held on deposit to be a publisher
+    type PublisherDeposit: Get<BalanceOf<Self>>;
+
     /// The amount held on deposit for a publish service
 		#[pallet::constant]
 		type BaseDeposit: Get<BalanceOf<Self>>;
@@ -106,6 +119,10 @@ pub mod pallet {
     /// The amount held on deposit per byte within the tip report reason or bounty description.
 		#[pallet::constant]
 		type DataDepositPerByte: Get<BalanceOf<Self>>;
+
+    /// Payment settlement duration in blocks.
+		#[pallet::constant]
+		type PaymentSettlePeriod: Get<Self::BlockNumber>;
 
     // /// The amount held on deposit per additional field for a publish service.
 		// #[pallet::constant]
@@ -144,7 +161,7 @@ pub mod pallet {
 		type ApproveOrigin: EnsureOrigin<Self::Origin>;
 
     /// The origin which may forcibly unpublish service. Root can always do this.
-		type ForceOrigin: EnsureOrigin<Self::Origin>;
+		type RejectOrigin: EnsureOrigin<Self::Origin>;
 
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
@@ -154,7 +171,7 @@ pub mod pallet {
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
     /// New published service.
-    ServicePublished{ service_id: ServiceIndex, on: T::BlockNumber },
+    ServiceProposed{ service_id: ServiceIndex, on: T::BlockNumber },
     /// A service has been taken down.
     ServiceUnpublished{ service_id: ServiceIndex, on: T::BlockNumber },
     /// New subscription to a service.
@@ -163,10 +180,14 @@ pub mod pallet {
     ServiceUnsubscribed{ service_id: ServiceIndex, subscriber: T::AccountId },
     /// A subscription has been renew.
     SubscriptionRenew{ service_id: ServiceIndex, subscriber: T::AccountId, expire_on: T::BlockNumber },
+    /// A subscription has been requested.
+    SubscriptionRequested{ service_id: ServiceIndex, subscriber: T::AccountId},
     /// An account has been requested for approved publisher
     RequestApprovedPublished{ account_id: T::AccountId },
     /// A publisher has been approved.
     PublisherApproved{ publisher: T::AccountId },
+    /// A publisher has been rejected.
+    PublisherRejected{ publisher: T::AccountId },
     /// A approved publisher was revoked.
     PublisherRovokeApproval{ publisher: T::AccountId },
   }
@@ -177,6 +198,8 @@ pub mod pallet {
     ServiceNotFound,
     ServiceAlreadyUnpublished,
     NotServicePublisher,
+    UnexpectedStatus,
+    TooManyQueued,
     // request publishing
     AlreadyRequestForApproval,
     NotRequestForApproval,
@@ -230,6 +253,19 @@ pub mod pallet {
     OptionQuery
   >;
 
+  /// This indicates whether a subscription is requested by subscriber or not.
+	#[pallet::storage]
+	#[pallet::getter(fn requested_subscription)]
+	pub type RequestedSubscription<T: Config> = StorageDoubleMap<
+    _, 
+    Twox64Concat, 
+    ServiceIndex, 
+    Twox64Concat,
+    T::AccountId, 
+    bool, 
+    ValueQuery
+  >;
+
   /// This indicates whether an account is approved publisher or not
 	#[pallet::storage]
 	#[pallet::getter(fn approved_publisher)]
@@ -246,9 +282,10 @@ pub mod pallet {
       // Get status of the sender.
       match ApprovedPublisher::<T>::get(&sender) {
         None => {
+          T::Currency::reserve(&sender, T::PublisherDeposit::get()).map_err(|_| Error::<T>::InsufficientPublisherBalance)?;
+
           // set the status of the sender to requested approval
           ApprovedPublisher::<T>::insert(&sender, PublisherStatus::Requested);
-
           Self::deposit_event(Event::RequestApprovedPublished{ account_id: sender });
           Ok(())
         },
@@ -275,16 +312,37 @@ pub mod pallet {
     }
 
     #[pallet::weight(<T as Config>::WeightInfo::revoke_publisher())]
+    pub fn reject_publisher(
+      origin: OriginFor<T>,
+      account_id: T::AccountId
+    ) -> DispatchResult {
+      T::RejectOrigin::ensure_origin(origin)?;
+
+      // Get status of the sender.
+      let publisher_status = ApprovedPublisher::<T>::get(&account_id).ok_or(Error::<T>::NotRequestForApproval)?;
+      ensure!(publisher_status == PublisherStatus::Requested, Error::<T>::AlreadyApprovedPublisher);
+
+      T::Currency::unreserve(&account_id, T::PublisherDeposit::get());
+      // remove the account from approved publisher.
+      ApprovedPublisher::<T>::remove(&account_id);
+
+      Self::deposit_event(Event::PublisherRovokeApproval{ publisher: account_id });
+			Ok(())
+    }    
+
+    #[pallet::weight(<T as Config>::WeightInfo::revoke_publisher())]
     pub fn revoke_publisher(
       origin: OriginFor<T>,
       account_id: T::AccountId
     ) -> DispatchResult {
-      T::ApproveOrigin::ensure_origin(origin)?;
+      T::RejectOrigin::ensure_origin(origin)?;
 
       // Get status of the sender.
       let publisher_status = ApprovedPublisher::<T>::get(&account_id).ok_or(Error::<T>::NotRequestForApproval)?;
       ensure!(publisher_status == PublisherStatus::Approved, Error::<T>::NotApprovedPublisher);
 
+      let imbalance = T::Currency::slash_reserved(&account_id, T::PublisherDeposit::get()).0;
+      T::OnSlash::on_unbalanced(imbalance);
       // remove the account from approved publisher.
       ApprovedPublisher::<T>::remove(&account_id);
 
@@ -292,12 +350,13 @@ pub mod pallet {
 			Ok(())
     }
 
-    #[pallet::weight(<T as Config>::WeightInfo::publish_service(name.len() as u32))]
-    pub fn publish_service(
+    #[pallet::weight(<T as Config>::WeightInfo::propose_service(name.len() as u32))]
+    pub fn propose_service(
 			origin: OriginFor<T>,
-			cost: BalanceOf<T>,
 			name: Vec<u8>,
       description: Vec<u8>,
+      need_approval: bool,
+			cost: Option<BalanceOf<T>>,
       maybe_periodic: Option<u32>,
 		) -> DispatchResult {
       let publisher = ensure_signed(origin)?;
@@ -321,14 +380,32 @@ pub mod pallet {
         name: bounded_name,
         contract: b"https://contract-link".to_vec().try_into().unwrap(),
         maybe_periodic,
-        status: ServiceStatus::Published,
+        need_approval,
+        status: ServiceStatus::Proposed,
       };
 
       Services::<T>::insert(service_id, &service);
       ServiceDescriptions::<T>::insert(service_id, bounded_description);
 
-      Self::deposit_event(Event::<T>::ServicePublished { service_id, on: <frame_system::Pallet<T>>::block_number() });
+      Self::deposit_event(Event::<T>::ServiceProposed { service_id, on: <frame_system::Pallet<T>>::block_number() });
       Ok(())
+    }
+
+    #[pallet::weight(<T as Config>::WeightInfo::approve_service)]
+    pub fn approve_service(
+      origin: OriginFor<T>,
+      service_id: ServiceIndex,
+    ) -> DispatchResult {
+      T::ApproveOrigin::ensure_origin(origin)?;
+
+      Services::<T>::try_mutate_exists(service_id, |maybe_service| -> DispatchResult {
+				let mut service = maybe_service.as_mut().ok_or(Error::<T>::ServiceNotFound)?;
+				ensure!(service.status == ServiceStatus::Proposed, Error::<T>::UnexpectedStatus);
+
+				service.status = ServiceStatus::Published;
+				Ok(())
+			})?;
+			Ok(())
     }
 
     #[pallet::weight(<T as Config>::WeightInfo::subscribe_service())]
@@ -341,14 +418,62 @@ pub mod pallet {
       match Services::<T>::get(&service_id) {
         None => Err(Error::<T>::ServiceNotFound)?,
         Some(service) => {
-          // ensure!(!Subscriptions::<T>::contains_key(&service_id, &subscriber), Error::<T>::AlreadySubscribed);
-          ensure!(service.status == ServiceStatus::Published, Error::<T>::ServiceAlreadyUnpublished);
+          ensure!(service.status == ServiceStatus::Published, Error::<T>::UnexpectedStatus);
+          ensure!(!Subscriptions::<T>::contains_key(&service_id, &subscriber), Error::<T>::AlreadySubscribed);
 
-          if let Some(subscription) = Subscriptions::<T>::get(&service_id, &subscriber) {
-            ensure!(!subscription.active, Error::<T>::AlreadySubscribed);
+          if (service.need_approval) {
+            RequestedSubscription::<T>::insert(&service_id, subscriber.clone(), true);
+
+            Self::deposit_event(Event::<T>::SubscriptionRequested{ service_id, subscriber });
+          } else {
+            if let Some(cost) = service.cost {
+              T::Currency::transfer(&subscriber, &Self::service_account_id(&service_id), cost, AllowDeath).map_err(|_| Error::<T>::InsufficientSubscriberBalance)?;
+              // T::Currency::reserve(&service.publisher, cost)?;
+            }
+
+            let start_on = <frame_system::Pallet<T>>::block_number();
+            let expire_on = if let Some(period) = service.maybe_periodic {
+              Some(start_on + period.into())
+            } else {
+              None
+            };
+  
+            let subscription = Subscription {
+              start_on,
+              expire_on,
+            };
+            Subscriptions::<T>::insert(&service_id, subscriber.clone(), subscription);
+  
+            Self::deposit_event(Event::<T>::ServiceSubscribed{ service_id, subscriber });
           }
-          
-          T::Currency::transfer(&subscriber, &service.publisher, service.cost, KeepAlive).map_err(|_| Error::<T>::InsufficientSubscriberBalance)?;
+
+          Ok(())
+        }
+      }
+    }
+
+    #[pallet::weight(<T as Config>::WeightInfo::subscribe_service())]
+    pub fn approve_subscription(
+      origin: OriginFor<T>,
+      service_id: ServiceIndex,
+      account_id: T::AccountId,
+    ) -> DispatchResult {
+      let publisher = ensure_signed(origin)?;
+
+      match Services::<T>::get(&service_id) {
+        None => Err(Error::<T>::ServiceNotFound)?,
+        Some(service) => {
+          ensure!(service.status == ServiceStatus::Published, Error::<T>::UnexpectedStatus);
+          ensure!(service.publisher == publisher, Error::<T>::NotServicePublisher);
+          ensure!(service.need_approval, Error::<T>::UnexpectedStatus);
+
+          ensure!(!Subscriptions::<T>::contains_key(&service_id, &subscriber), Error::<T>::AlreadySubscribed);
+          ensure!(RequestedSubscription::<T>::contains_key(&service_id, &subscriber), Error::<T>::NotRequestForApproval);
+
+          if let Some(cost) = service.cost {
+            T::Currency::transfer(&account_id, &Self::service_account_id(&service_id), cost, AllowDeath).map_err(|_| Error::<T>::InsufficientSubscriberBalance)?;
+            // T::Currency::reserve(&publisher, cost)?;
+          }
 
           let start_on = <frame_system::Pallet<T>>::block_number();
           let expire_on = if let Some(period) = service.maybe_periodic {
@@ -360,14 +485,16 @@ pub mod pallet {
           let subscription = Subscription {
             start_on,
             expire_on,
-            active: true,
           };
+
+          RequestedSubscription::<T>::remove(&service_id, &subscriber);
           Subscriptions::<T>::insert(&service_id, subscriber.clone(), subscription);
 
           Self::deposit_event(Event::<T>::ServiceSubscribed{ service_id, subscriber });
+
           Ok(())
         }
-      }
+      }      
     }
 
     #[pallet::weight(<T as Config>::WeightInfo::unsubscribe_service())]
@@ -463,4 +590,17 @@ pub mod pallet {
       Ok(())
     }
   }
+}
+
+impl<T: Config> Pallet<T> {
+  pub fn account_id() -> T::AccountId {
+		T::PalletId::get().into_account()
+	}
+
+	/// The account ID of a service account
+	pub fn service_account_id(id: ServiceIndex) -> T::AccountId {
+		// only use two byte prefix to support 16 byte account id (used by test)
+		// "modl" ++ "py/trsry" ++ "sv" is 14 bytes, and two bytes remaining for service index
+		T::PalletId::get().into_sub_account(("sv", id))
+	}
 }

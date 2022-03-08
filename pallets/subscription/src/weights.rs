@@ -47,7 +47,8 @@ pub trait WeightInfo {
 	fn request_approved_publisher() -> Weight;
 	fn approve_publisher() -> Weight;
 	fn revoke_publisher() -> Weight;
-	fn publish_service(n: u32, ) -> Weight;
+	fn propose_service(n: u32, ) -> Weight;
+	fn approve_service() -> Weight;
 	fn subscribe_service() -> Weight;
 	fn unsubscribe_service() -> Weight;
 	fn renew_subscription() -> Weight;
@@ -85,10 +86,14 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	// Storage: Identity IdentityOf (r:1 w:0)
 	// Storage: Identity SubsOf (r:1 w:1)
 	// Storage: Identity SuperOf (r:1 w:1)
-	fn publish_service(n: u32) -> Weight {
+	fn propose_service(n: u32) -> Weight {
 		(38_917_000 as Weight)
 			// Standard Error: 3_000
 			.saturating_add((5_331_000 as Weight).saturating_mul(n as Weight))
+	}
+
+	fn approve_service() -> Weight {
+		(19_176_000 as Weight)
 	}
 
 	fn subscribe_service() -> Weight {
@@ -259,10 +264,14 @@ impl WeightInfo for () {
 	// Storage: Identity IdentityOf (r:1 w:0)
 	// Storage: Identity SubsOf (r:1 w:1)
 	// Storage: Identity SuperOf (r:1 w:1)
-	fn publish_service(n: u32) -> Weight {
+	fn propose_service(n: u32) -> Weight {
 		(38_917_000 as Weight)
 			// Standard Error: 3_000
 			.saturating_add((5_331_000 as Weight).saturating_mul(n as Weight))
+	}
+	
+	fn approve_service() -> Weight {
+		(19_176_000 as Weight)
 	}
 
 	fn subscribe_service() -> Weight {
