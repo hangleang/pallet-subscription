@@ -42,6 +42,7 @@ pub use sp_runtime::{Perbill, Permill};
 
 /// Import the template pallet.
 pub use pallet_template;
+pub use pallet_subscription;
 
 /// An index to a block.
 pub type BlockNumber = u32;
@@ -276,39 +277,18 @@ impl pallet_template::Config for Runtime {
 	type Event = Event;
 }
 
-// parameter_types! {
-// 	pub const BasicDeposit: Balance = 10 * DOLLARS;       // 258 bytes on-chain
-// 	pub const FieldDeposit: Balance = 250 * CENTS;        // 66 bytes on-chain
-// 	pub const SubAccountDeposit: Balance = 2 * DOLLARS;   // 53 bytes on-chain
-// 	pub const MaxSubAccounts: u32 = 100;
-// 	pub const MaxAdditionalFields: u32 = 100;
-// 	pub const MaxRegistrars: u32 = 20;
-// }
-
-// impl pallet_identity::Config for Runtime {
-// 	type Event = Event;
-// 	type Currency = Balances;
-// 	type BasicDeposit = BasicDeposit;
-// 	type FieldDeposit = FieldDeposit;
-// 	type SubAccountDeposit = SubAccountDeposit;
-// 	type MaxSubAccounts = MaxSubAccounts;
-// 	type MaxAdditionalFields = MaxAdditionalFields;
-// 	type MaxRegistrars = MaxRegistrars;
-// 	type Slashed = ();
-// 	type ForceOrigin = frame_system::EnsureRoot<AccountId>;
-// 	type RegistrarOrigin = frame_system::EnsureRoot<AccountId>;
-// 	type WeightInfo = pallet_identity::weights::SubstrateWeight<Runtime>;
-// }
-
 parameter_types! {
-	pub const PublisherDeposit: Balance = 100 * DOLLARS;  
-	pub const BaseDeposit: Balance = 10 * DOLLARS;       // 258 bytes on-chain
-	pub const MaxPublishing: u32 = 100;
-	pub const MaxSubscriber: u32 = 5;
+	pub const PublisherDeposit: Balance = 100 * CENTS;  
+	pub const BaseDeposit: Balance = 10 * CENTS;       // 258 bytes on-chain
+	pub const MaxService: u32 = 2222;
+	pub const MaxPublisher: u32 = 22;
+	pub const MaxPublishing: u32 = 222;
+	pub const MaxSubscriber: u32 = 22222;
+	pub const MaxSubscription: u32 = 222222;
 	pub const PaymentSettlePeriod: BlockNumber = 6 * HOURS;
-	pub const MaximumNameLength: u32 = 100;
-	pub const MaximumContractLength: u32 = 256;
-	pub const MaximumDescriptionLength: u32 = 1275;
+	pub const MaximumNameLength: u32 = 222;
+	pub const MaximumContractLength: u32 = 222;
+	pub const MaximumDescriptionLength: u32 = 2222;
 	pub const DataDepositPerByte: Balance = 1 * CENTS;
 }
 
@@ -317,8 +297,11 @@ impl pallet_subscription::Config for Runtime {
 	type Currency = Balances;
 	type PublisherDeposit = PublisherDeposit;
 	type BaseDeposit = BaseDeposit;
+	type MaxService = MaxService;
+	type MaxPublisher = MaxPublisher;
 	type MaxPublishing = MaxPublishing;
 	type MaxSubscriber = MaxSubscriber;
+	type MaxSubscription = MaxSubscription;
 	type PaymentSettlePeriod = PaymentSettlePeriod;
 	type MaximumNameLength = MaximumNameLength;
 	type MaximumContractLength = MaximumContractLength;
@@ -347,7 +330,6 @@ construct_runtime!(
 		Sudo: pallet_sudo,
 		// Include the custom logic from the pallet-template in the runtime.
 		TemplateModule: pallet_template,
-		// Identity: pallet_identity,
 		Subscription: pallet_subscription,
 	}
 );
