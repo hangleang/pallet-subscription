@@ -126,6 +126,7 @@ pub struct Payment<
   BlockNumber: MaxEncodedLen + Clone + Copy + Debug + Eq + PartialEq,
 > {
   amount: Balance,
+  is_refund: bool,
   created_at: BlockNumber,
 }
 
@@ -252,8 +253,6 @@ pub mod pallet {
     Premature,
     ServiceAlreadyPublished,
     ServiceNotFound,
-    InsufficientPublisherBalance,
-    InsufficientSubscriberBalance,
     // request publisher
     NotRequestForApproval,
     // publish service
@@ -374,7 +373,7 @@ pub mod pallet {
         None => {}
       }
 
-      T::Currency::reserve(&sender, T::PublisherDeposit::get()).map_err(|_| Error::<T>::InsufficientPublisherBalance)?;
+      T::Currency::reserve(&sender, T::PublisherDeposit::get())?;
 
       // set the status of the sender to requested approval
       ApprovedPublisher::<T>::insert(&sender, PublisherStatus::Requested);
@@ -463,7 +462,7 @@ pub mod pallet {
 
       // reserve deposit for new service
       let bond = T::BaseDeposit::get() + T::DataDepositPerByte::get() * ((bounded_name.len() + bounded_description.len()) as u32).into();
-      T::Currency::reserve(&publisher, bond).map_err(|_| Error::<T>::InsufficientPublisherBalance)?;
+      T::Currency::reserve(&publisher, bond)?;
       ServiceCount::<T>::put(service_id + 1);
 
       let service = Service {
@@ -519,14 +518,22 @@ pub mod pallet {
           ensure!(service.status == ServiceStatus::Published, Error::<T>::UnexpectedStatus);
           ensure!(!Subscriptions::<T>::contains_key(&service_id, &subscriber), Error::<T>::AlreadySubscribed);
 
+          let current_block = <frame_system::Pallet<T>>::block_number();
+          T::Currency::transfer(&subscriber, &service.publisher, service.fee, AllowDeath)?;
+          PaymentsReport::<T>::try_mutate(&service.publisher, &subscriber.clone(), |v| -> DispatchResult {
+            v.try_push(Payment {
+              amount: service.fee,
+              is_refund: false,
+              created_at: current_block
+            }).map_err(|()| Error::<T>::TooManyQueued)?;
+            Ok(())
+          })?;
+
           if service.need_approval {
             RequestedSubscription::<T>::insert(&service_id, subscriber.clone(), true);
 
             Self::deposit_event(Event::<T>::SubscriptionRequested{ service_id, subscriber });
           } else {
-            T::Currency::transfer(&subscriber, &service.publisher, service.fee, AllowDeath).map_err(|_| Error::<T>::InsufficientSubscriberBalance)?;
-
-            let current_block = <frame_system::Pallet<T>>::block_number();
             let expire_on = if let Some(period) = service.maybe_periodic {
               Some(current_block + period.into())
             } else {
@@ -541,13 +548,6 @@ pub mod pallet {
             ServiceSubscribers::<T>::try_mutate(&service_id, |subscribers| -> DispatchResult {
               subscribers.try_push(subscriber.clone()).map_err(|()| Error::<T>::TooManyQueued)?;
 
-              Ok(())
-            })?;
-            PaymentsReport::<T>::try_mutate(&service.publisher, &subscriber.clone(), |v| -> DispatchResult {
-              v.try_push(Payment {
-                amount: service.fee,
-                created_at: current_block
-              }).map_err(|()| Error::<T>::TooManyQueued)?;
               Ok(())
             })?;
   
@@ -577,8 +577,6 @@ pub mod pallet {
           ensure!(!Subscriptions::<T>::contains_key(&service_id, &account_id), Error::<T>::AlreadySubscribed);
           ensure!(RequestedSubscription::<T>::contains_key(&service_id, &account_id), Error::<T>::NotRequestForApproval);
 
-          T::Currency::transfer(&account_id, &publisher, service.fee, AllowDeath).map_err(|_| Error::<T>::InsufficientSubscriberBalance)?;
-
           let current_block = <frame_system::Pallet<T>>::block_number();
           let expire_on = if let Some(period) = service.maybe_periodic {
             Some(current_block + period.into())
@@ -598,9 +596,38 @@ pub mod pallet {
 
             Ok(())
           })?;
-          PaymentsReport::<T>::try_mutate(&publisher, &account_id.clone(), |v| -> DispatchResult {
+
+          Self::deposit_event(Event::<T>::ServiceSubscribed{ service_id, subscriber: account_id });
+          Ok(())
+        }
+      }      
+    }
+
+    #[pallet::weight(<T as Config>::WeightInfo::subscribe_service())]
+    pub fn reject_subscription(
+      origin: OriginFor<T>,
+      service_id: ServiceIndex,
+      account_id: T::AccountId,
+    ) -> DispatchResult {
+      let publisher = ensure_signed(origin)?;
+
+      match Services::<T>::get().get(service_id as usize) {
+        None => return Err(Error::<T>::ServiceNotFound.into()),
+        Some(service) => {
+          ensure!(service.status == ServiceStatus::Published, Error::<T>::UnexpectedStatus);
+          ensure!(service.publisher == publisher, BadOrigin);
+          ensure!(service.need_approval, Error::<T>::NoNeedYourApproval);
+
+          ensure!(!Subscriptions::<T>::contains_key(&service_id, &account_id), Error::<T>::AlreadySubscribed);
+          ensure!(RequestedSubscription::<T>::contains_key(&service_id, &account_id), Error::<T>::NotRequestForApproval);
+
+          let current_block = <frame_system::Pallet<T>>::block_number();
+          T::Currency::transfer(&publisher, &account_id, service.fee, AllowDeath)?;
+          RequestedSubscription::<T>::remove(&service_id, &account_id);
+          PaymentsReport::<T>::try_mutate(&service.publisher, &account_id.clone(), |v| -> DispatchResult {
             v.try_push(Payment {
               amount: service.fee,
+              is_refund: true,
               created_at: current_block
             }).map_err(|()| Error::<T>::TooManyQueued)?;
             Ok(())
@@ -648,7 +675,7 @@ pub mod pallet {
         Some(service) => match service.maybe_periodic {
           None => Err(Error::<T>::NotPeriodicService)?,
           Some(period) => {
-            T::Currency::transfer(&subscriber, &service.publisher, service.fee, AllowDeath).map_err(|_| Error::<T>::InsufficientSubscriberBalance)?;
+            T::Currency::transfer(&subscriber, &service.publisher, service.fee, AllowDeath)?;
 
             let current_block = <frame_system::Pallet<T>>::block_number();
             let expire_on = current_block + period.into();
@@ -662,6 +689,7 @@ pub mod pallet {
             PaymentsReport::<T>::try_mutate(&service.publisher, &subscriber.clone(), |v| -> DispatchResult {
               v.try_push(Payment {
                 amount: service.fee,
+                is_refund: false,
                 created_at: current_block
               }).map_err(|()| Error::<T>::TooManyQueued)?;
               Ok(())
@@ -758,10 +786,10 @@ pub mod pallet {
   
               //     if let Some(expire_on) = subscription.expire_on {
               //       if current_block < expire_on {
-              //         T::Currency::transfer(&publisher, &sub, service.fee, AllowDeath).map_err(|_| Error::<T>::InsufficientPublisherBalance)?;
+              //         T::Currency::transfer(&publisher, &sub, service.fee, AllowDeath)?;
               //       }
               //     } else {
-              //       T::Currency::transfer(&publisher, &sub, service.fee, AllowDeath).map_err(|_| Error::<T>::InsufficientPublisherBalance)?;
+              //       T::Currency::transfer(&publisher, &sub, service.fee, AllowDeath)?;
               //     }
   
               //     *maybe_sub = None;
@@ -807,15 +835,22 @@ pub mod pallet {
                 
                 let err_amount = T::Currency::unreserve(&service.publisher, service.bond);
                 debug_assert!(err_amount.is_zero());
+
+                service.status = ServiceStatus::Unpublished;
+                Ok(())
               },
-              _ => {
-                ensure!(maybe_publisher.is_none(), BadOrigin);
-                slash_publisher(&service.publisher, &mut service.bond)
+              _ => match maybe_publisher {
+                None => {
+                  slash_publisher(&service.publisher, &mut service.bond);
+                  Ok(())
+                },
+                Some(sender) => {
+                  ensure!(sender == service.publisher, BadOrigin);
+                  Err(Error::<T>::UnexpectedStatus.into())
+                }
               },
             }
 
-            service.status = ServiceStatus::Unpublished;
-            Ok(())
           }
         }
 
